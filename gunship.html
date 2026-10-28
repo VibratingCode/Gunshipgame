@@ -1,0 +1,183 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Gunship: Overwatch</title>
+<style>
+html,body{margin:0;height:100%;background:#000;overflow:hidden;cursor:none;font-family:Consolas,monospace}
+canvas{display:block}
+</style></head><body>
+<canvas id="c"></canvas>
+<script>
+const cv=document.getElementById('c'),ctx=cv.getContext('2d');
+let W,H;function rs(){W=cv.width=innerWidth;H=cv.height=innerHeight}rs();onresize=rs;
+
+// ---------- world ----------
+const WORLD=2400, BASE={x:0,y:0,r:70};
+const rand=(a,b)=>a+Math.random()*(b-a);
+const buildings=[];
+for(let i=0;i<70;i++){const x=rand(-1100,1100),y=rand(-1100,1100);if(Math.hypot(x,y)<220)continue;
+ buildings.push({x,y,w:rand(30,110),h:rand(30,110),a:rand(0,Math.PI),t:rand(.15,.3)});}
+const roads=[[-1200,40,1200,40],[60,-1200,60,1200],[-1200,-600,1200,-500],[-700,-1200,-500,1200],[600,-1200,700,1200]];
+const trees=[];for(let i=0;i<260;i++)trees.push({x:rand(-1200,1200),y:rand(-1200,1200),r:rand(4,10)});
+
+// ---------- weapons ----------
+const WEAPONS=[
+ {name:'25mm GAU-12',rate:0.035,dmg:1,rad:9,mag:500,reload:3,zoom:2.2,spread:8,shell:1.6,ammo:500},
+ {name:'40mm BOFORS',rate:0.45,dmg:3,rad:28,mag:40,reload:4,zoom:1.5,spread:4,shell:2.3,ammo:40},
+ {name:'105mm HOWITZER',rate:2.6,dmg:10,rad:75,mag:8,reload:6,zoom:1.0,spread:2,shell:3.4,ammo:8},
+ {name:'AGM-114 HELLFIRE',rate:1.2,dmg:12,rad:55,mag:4,reload:9,zoom:1.0,spread:0,shell:0,ammo:4,missile:true},
+];
+let wi=0,cool=0,reloadT=0;
+let zoom=1, orbit=0, shake=0;
+const mouse={x:W/2,y:H/2,down:false};
+let shells=[],booms=[],decals=[],zombies=[],missiles=[],corpses=[];
+let wave=0,waveLeft=0,spawnT=0,kills=0,baseHP=100,over=false,started=false,flash=0,whiteHot=true;
+
+function cam(){return{s:zoom*Math.min(W,H)/1100,a:orbit}}
+function w2s(x,y){const{s,a}=cam();const c=Math.cos(a),n=Math.sin(a);return[W/2+(x*c-y*n)*s,H/2+(x*n+y*c)*s*0.82]}
+function s2w(px,py){const{s,a}=cam();const X=(px-W/2)/s,Y=(py-H/2)/(s*0.82);const c=Math.cos(-a),n=Math.sin(-a);return[X*c-Y*n,X*n+Y*c]}
+
+function startWave(){wave++;waveLeft=60+wave*80;spawnT=0;
+ for(const w of WEAPONS){w.ammo=w.mag}}
+function spawnZombie(){const ang=rand(0,Math.PI*2),d=rand(1050,1250);
+ const big=Math.random()<Math.min(.02*wave,.12);
+ zombies.push({x:Math.cos(ang)*d,y:Math.sin(ang)*d,hp:big?14:1+(wave>3?Math.random()<.3?2:0:0),
+  sp:big?12:rand(14,26)+wave*1.2,big,ph:rand(0,6),wob:rand(-.5,.5)});}
+
+addEventListener('mousemove',e=>{mouse.x=e.clientX;mouse.y=e.clientY});
+addEventListener('mousedown',e=>{if(!started||over){started=true;if(over)reset();else startWave();return}
+ if(e.button===0)mouse.down=true;if(e.button===2)zoomCycle()});
+addEventListener('mouseup',e=>{if(e.button===0)mouse.down=false});
+addEventListener('contextmenu',e=>e.preventDefault());
+addEventListener('wheel',e=>{wi=(wi+(e.deltaY>0?1:3))%4;cool=.2});
+addEventListener('keydown',e=>{const k=e.key.toLowerCase();
+ if('1234'.includes(k)){wi=+k-1;cool=.2}
+ if(k==='r')reload(); if(k==='f')whiteHot=!whiteHot; if(k==='z'||k===' ')zoomCycle()});
+function zoomCycle(){zoom=zoom>=2.5?1:zoom*1.6}
+function reload(){const w=WEAPONS[wi];if(w.ammo<w.mag&&reloadT<=0)reloadT=w.reload}
+function reset(){zombies=[];shells=[];booms=[];decals=[];missiles=[];corpses=[];wave=0;kills=0;baseHP=100;over=false;startWave()}
+
+function fire(){const w=WEAPONS[wi];if(cool>0||reloadT>0)return;
+ if(w.ammo<=0){reload();return}
+ w.ammo--;cool=w.rate;
+ let [tx,ty]=s2w(mouse.x,mouse.y);
+ const sp=w.spread/zoom;tx+=rand(-sp,sp);ty+=rand(-sp,sp);
+ if(w.missile){missiles.push({x:tx+300*Math.cos(orbit+2),y:ty+300*Math.sin(orbit+2),h:600,tx,ty,t:0,w,lock:nearest(tx,ty,90)})}
+ else shells.push({tx,ty,t:w.shell*0.25+0.15,w});
+ shake=Math.max(shake,wi===2?14:wi===1?4:1.2);
+ if(w.ammo<=0)reload();}
+function nearest(x,y,r){let b=null,bd=r;for(const z of zombies){const d=Math.hypot(z.x-x,z.y-y);if(d<bd){bd=d;b=z}}return b}
+function explode(x,y,w){booms.push({x,y,r:w.rad,t:0,big:w.rad>40});
+ decals.push({x,y,r:w.rad*.55,t:0});if(decals.length>250)decals.shift();
+ if(w.rad>40){shake=Math.max(shake,18);flash=.5}
+ for(const z of zombies){const d=Math.hypot(z.x-x,z.y-y);if(d<w.rad){z.hp-=w.dmg*(d<w.rad*.5?1:.6);
+  if(z.hp<=0&&!z.dead){z.dead=true;kills++;corpses.push({x:z.x,y:z.y,t:0,big:z.big,
+   vx:(z.x-x)/(d+1)*w.rad*1.5,vy:(z.y-y)/(d+1)*w.rad*1.5})}}}
+ zombies=zombies.filter(z=>!z.dead);}
+
+// ---------- loop ----------
+let last=performance.now();
+function step(now){const dt=Math.min(.05,(now-last)/1000);last=now;
+ if(started&&!over)update(dt);draw();requestAnimationFrame(step)}
+function update(dt){
+ orbit+=dt*0.04; cool-=dt; shake*=Math.pow(.02,dt); flash=Math.max(0,flash-dt*2);
+ if(reloadT>0){reloadT-=dt;if(reloadT<=0)WEAPONS[wi].ammo=WEAPONS[wi].mag}
+ if(mouse.down)fire();
+ if(waveLeft>0){spawnT-=dt;while(spawnT<0&&waveLeft>0){spawnZombie();waveLeft--;spawnT+=Math.max(.02,.25-wave*.02)}}
+ else if(zombies.length===0){startWave()}
+ for(const s of shells){s.t-=dt;if(s.t<=0){explode(s.tx,s.ty,s.w);s.done=true}}
+ shells=shells.filter(s=>!s.done);
+ for(const m of missiles){m.t+=dt;if(m.lock&&!m.lock.dead){m.tx=m.lock.x;m.ty=m.lock.y}
+  const dx=m.tx-m.x,dy=m.ty-m.y,d=Math.hypot(dx,dy);const v=500*dt;m.h-=600*dt*(m.h/(d+m.h));
+  if(d<v||m.h<5){explode(m.tx,m.ty,m.w);m.done=true}else{m.x+=dx/d*v;m.y+=dy/d*v}}
+ missiles=missiles.filter(m=>!m.done);
+ for(const z of zombies){const dx=BASE.x-z.x,dy=BASE.y-z.y,d=Math.hypot(dx,dy);z.ph+=dt*6;
+  if(d>BASE.r){const a=Math.atan2(dy,dx)+Math.sin(z.ph*.3)*z.wob;z.x+=Math.cos(a)*z.sp*dt;z.y+=Math.sin(a)*z.sp*dt}
+  else{baseHP-=dt*(z.big?3:.6)}}
+ // separation (cheap grid)
+ const g=new Map();for(const z of zombies){const k=((z.x/12)|0)+','+((z.y/12)|0);if(g.has(k)){const o=g.get(k);z.x+=rand(-3,3);z.y+=rand(-3,3)}else g.set(k,z)}
+ for(const b of booms)b.t+=dt;booms=booms.filter(b=>b.t<1.2);
+ for(const c of corpses){c.t+=dt;c.x+=c.vx*dt;c.y+=c.vy*dt;c.vx*=.9;c.vy*=.9}corpses=corpses.filter(c=>c.t<14);
+ for(const d of decals)d.t+=dt;
+ if(baseHP<=0){baseHP=0;over=true}
+}
+
+function heat(v){// v 0..1 -> grey; black-hot inverts
+ v=Math.max(0,Math.min(1,v));const g=whiteHot?v:1-v;const n=(g*255)|0;return`rgb(${n},${n},${n})`}
+
+function draw(){
+ const sx=rand(-shake,shake),sy=rand(-shake,shake);
+ ctx.setTransform(1,0,0,1,0,0);ctx.fillStyle=heat(.18);ctx.fillRect(0,0,W,H);
+ ctx.translate(sx,sy);
+ const {s}=cam();
+ // roads
+ ctx.lineCap='butt';
+ for(const r of roads){const a=w2s(r[0],r[1]),b=w2s(r[2],r[3]);ctx.strokeStyle=heat(.27);ctx.lineWidth=26*s;ctx.beginPath();ctx.moveTo(...a);ctx.lineTo(...b);ctx.stroke()}
+ // decals (scorch, cools over time)
+ for(const d of decals){const p=w2s(d.x,d.y);ctx.fillStyle=heat(.12+Math.max(0,.5-d.t*.03));ctx.beginPath();ctx.ellipse(p[0],p[1],d.r*s,d.r*s*.82,0,0,7);ctx.fill()}
+ // trees
+ for(const t of trees){const p=w2s(t.x,t.y);ctx.fillStyle=heat(.1);ctx.beginPath();ctx.arc(p[0],p[1],t.r*s,0,7);ctx.fill()}
+ // buildings
+ for(const b of buildings){drawBox(b.x,b.y,b.w,b.h,b.a,heat(b.t),heat(b.t+.1))}
+ // base
+ drawBox(0,0,90,70,.3,heat(.35),heat(.5));
+ const bp=w2s(0,0);ctx.strokeStyle=heat(.6);ctx.setLineDash([6,6]);ctx.lineWidth=1;ctx.beginPath();ctx.ellipse(bp[0],bp[1],BASE.r*s*1.6,BASE.r*s*1.3,0,0,7);ctx.stroke();ctx.setLineDash([]);
+ // survivors at base
+ for(let i=0;i<8;i++){const a=i*.8+performance.now()/3000;const p=w2s(Math.cos(a)*55,Math.sin(a)*45);ctx.fillStyle=heat(.95);ctx.fillRect(p[0]-1.5*s,p[1]-1.5*s,3*s,3*s)}
+ // corpses (cooling)
+ for(const c of corpses){const p=w2s(c.x,c.y);ctx.fillStyle=heat(.85-c.t*.05);ctx.fillRect(p[0]-2*s,p[1]-1*s,(c.big?8:4)*s,2*s)}
+ // zombies
+ for(const z of zombies){const p=w2s(z.x,z.y);const r=(z.big?6:2.4)*s;const bob=Math.sin(z.ph)*.4*s;
+  ctx.fillStyle=heat(.9);ctx.beginPath();ctx.arc(p[0],p[1]+bob,r,0,7);ctx.fill();
+  ctx.fillStyle=heat(.3);ctx.fillRect(p[0]+r*.6,p[1]+r*.4,r*1.2,r*.6)}// shadow
+ // missiles
+ for(const m of missiles){const p=w2s(m.x,m.y);ctx.fillStyle=heat(1);ctx.beginPath();ctx.arc(p[0],p[1]-m.h*s*.3,3,0,7);ctx.fill()}
+ // explosions
+ for(const b of booms){const p=w2s(b.x,b.y);const k=b.t/1.2;
+  const g=ctx.createRadialGradient(p[0],p[1],0,p[0],p[1],b.r*s*(.6+k*.8));
+  g.addColorStop(0,heat(1-k*.5));g.addColorStop(.6,heat(.9-k*.6));g.addColorStop(1,'rgba(0,0,0,0)');
+  ctx.globalAlpha=1-k;ctx.fillStyle=g;ctx.beginPath();ctx.arc(p[0],p[1],b.r*s*(.6+k*.8),0,7);ctx.fill();
+  if(b.big&&k<.3){ctx.strokeStyle=heat(1);ctx.lineWidth=2;ctx.beginPath();ctx.arc(p[0],p[1],b.r*s*k*6,0,7);ctx.stroke()}
+  ctx.globalAlpha=1}
+ ctx.setTransform(1,0,0,1,0,0);
+ // noise + scanlines
+ ctx.globalAlpha=.07;for(let i=0;i<500;i++){ctx.fillStyle=Math.random()<.5?'#fff':'#000';ctx.fillRect(Math.random()*W,Math.random()*H,2,2)}
+ ctx.globalAlpha=.08;ctx.fillStyle='#000';for(let y=0;y<H;y+=3)ctx.fillRect(0,y,W,1);ctx.globalAlpha=1;
+ if(flash){ctx.fillStyle=`rgba(255,255,255,${flash*.6})`;ctx.fillRect(0,0,W,H)}
+ // vignette
+ const vg=ctx.createRadialGradient(W/2,H/2,Math.min(W,H)*.35,W/2,H/2,Math.max(W,H)*.75);vg.addColorStop(0,'rgba(0,0,0,0)');vg.addColorStop(1,'rgba(0,0,0,.8)');ctx.fillStyle=vg;ctx.fillRect(0,0,W,H);
+ hud();
+}
+function drawBox(x,y,w,h,a,top,side){const c=Math.cos(a),n=Math.sin(a);
+ const pts=[[-w/2,-h/2],[w/2,-h/2],[w/2,h/2],[-w/2,h/2]].map(([u,v])=>w2s(x+u*c-v*n,y+u*n+v*c));
+ ctx.fillStyle=side;ctx.beginPath();pts.forEach((p,i)=>ctx[i?'lineTo':'moveTo'](p[0]+4,p[1]+4));ctx.fill();
+ ctx.fillStyle=top;ctx.beginPath();pts.forEach((p,i)=>ctx[i?'lineTo':'moveTo'](...p));ctx.fill()}
+
+function hud(){
+ const col=whiteHot?'#e8e8e8':'#111';const shadow=whiteHot?'#000':'#fff';
+ ctx.strokeStyle=col;ctx.fillStyle=col;ctx.lineWidth=2;ctx.font='14px Consolas,monospace';
+ const mx=mouse.x,my=mouse.y,w=WEAPONS[wi];
+ // reticle per weapon
+ ctx.beginPath();
+ if(wi===0){ctx.moveTo(mx-30,my);ctx.lineTo(mx-8,my);ctx.moveTo(mx+8,my);ctx.lineTo(mx+30,my);ctx.moveTo(mx,my-30);ctx.lineTo(mx,my-8);ctx.moveTo(mx,my+8);ctx.lineTo(mx,my+30)}
+ else if(wi===1){ctx.rect(mx-22,my-22,44,44);ctx.moveTo(mx-40,my);ctx.lineTo(mx-22,my);ctx.moveTo(mx+22,my);ctx.lineTo(mx+40,my);ctx.moveTo(mx,my-40);ctx.lineTo(mx,my-22);ctx.moveTo(mx,my+22);ctx.lineTo(mx,my+40)}
+ else{const L=70;for(const[a,b]of[[-1,-1],[1,-1],[1,1],[-1,1]]){ctx.moveTo(mx+a*L,my+b*L*.6);ctx.lineTo(mx+a*L,my+b*(L*.6-15));ctx.moveTo(mx+a*L,my+b*L*.6);ctx.lineTo(mx+a*(L-15),my+b*L*.6)}
+  ctx.moveTo(mx-L,my);ctx.lineTo(mx-10,my);ctx.moveTo(mx+10,my);ctx.lineTo(mx+L,my);ctx.moveTo(mx,my-L*.6);ctx.lineTo(mx,my+L*.6)}
+ ctx.stroke();
+ if(wi===3){const [tx,ty]=s2w(mx,my);const t=nearest(tx,ty,90);if(t){const p=w2s(t.x,t.y);ctx.strokeRect(p[0]-10,p[1]-10,20,20);ctx.fillText('LOCK',p[0]+14,p[1]-12)}}
+ // frame brackets
+ const m=40;ctx.beginPath();for(const[x,y,dx,dy]of[[m,m,1,1],[W-m,m,-1,1],[W-m,H-m,-1,-1],[m,H-m,1,-1]]){ctx.moveTo(x,y+dy*40);ctx.lineTo(x,y);ctx.lineTo(x+dx*40,y)}ctx.stroke();
+ const T=(t,x,y,al='left')=>{ctx.textAlign=al;ctx.fillStyle=shadow;ctx.fillText(t,x+1,y+1);ctx.fillStyle=col;ctx.fillText(t,x,y)};
+ T(whiteHot?'WHT':'BLK',60,70);T(`${(zoom*12).toFixed(0)}X`,60,90);
+ T(`ALT 8500  HDG ${((orbit*57.3)%360).toFixed(0).padStart(3,'0')}`,W/2,70,'center');
+ const [tx,ty]=s2w(mx,my);T(`TGT ${tx.toFixed(0)} ${ty.toFixed(0)}`,W/2,H-60,'center');
+ WEAPONS.forEach((x,i)=>{const sel=i===wi;T(`${sel?'>':' '} ${i+1} ${x.name.padEnd(17)} ${String(x.ammo).padStart(3)}/${x.mag}`,W-360,70+i*20)});
+ if(reloadT>0)T(`RELOADING ${reloadT.toFixed(1)}`,W-360,160);
+ T(`WAVE ${wave}`,60,H-100);T(`KIA  ${kills}`,60,H-80);T(`HOSTILES ${zombies.length+waveLeft}`,60,H-60);
+ T(`SURVIVORS INTEGRITY ${baseHP.toFixed(0)}%`,W-360,H-60);
+ ctx.strokeRect(W-360,H-50,250,8);ctx.fillRect(W-360,H-50,250*baseHP/100,8);
+ if(baseHP<30&&Math.sin(performance.now()/120)>0){ctx.font='bold 22px Consolas';T('!! PERIMETER BREACH !!',W/2,110,'center')}
+ if(!started||over){ctx.fillStyle='rgba(0,0,0,.7)';ctx.fillRect(0,0,W,H);ctx.font='bold 34px Consolas';ctx.fillStyle='#eee';ctx.textAlign='center';
+  ctx.fillText(over?`OUTPOST LOST — ${kills} KIA, WAVE ${wave}`:'GUNSHIP: OVERWATCH',W/2,H/2-60);ctx.font='16px Consolas';
+  ['Protect the survivor outpost in the center from the horde.','MOUSE aim · LMB fire · 1-4 / wheel switch weapon · RMB/Z/SPACE zoom · R reload · F white/black-hot','','CLICK TO '+(over?'RETRY':'BEGIN')].forEach((l,i)=>ctx.fillText(l,W/2,H/2+i*26));}
+}
+requestAnimationFrame(step);
+</script></body></html>
